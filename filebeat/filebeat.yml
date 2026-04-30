@@ -1,0 +1,12 @@
+#filebeat.yml
+logging.level: debug
+filebeat.inputs:
+- type: log
+  enabled: true
+  paths:
+    - /usr/share/filebeat/products_service/*.log
+    - /usr/share/filebeat/auth_service/*.log
+    - /usr/share/filebeat/orders_service/*.log
+
+output.logstash:
+  hosts: ["logstash:5044"]
