@@ -441,6 +441,14 @@ class Supplier(SupplierBase):
 
     class Config:
         orm_mode = True
+        schema_extra = {
+            "example": {
+                "supplier_id": "8d14a7ed-353c-4d58-9990-301d4c79665e",
+                "name": "Acme LLC",
+                "contact_name": "Ivan Petrov",
+                "contact_email": "sales@acme.com"
+            }
+        }
 
 
 class SupplierDocument(BaseModel):

@@ -282,7 +282,7 @@ def search_products(name: str, db: Session = Depends(get_session_local), credent
 # ---- CRUD операции для поставщиков (Supplier) ----
 
 
-@router.post("/suppliers/", response_model=schemas.Supplier, tags=["Suppliers Service"], status_code=status.HTTP_201_CREATED, summary="Create a new supplier")
+@router.post("/suppliers/", response_model=schemas.Supplier, response_model_exclude_none=True, tags=["Suppliers Service"], status_code=status.HTTP_201_CREATED, summary="Create a new supplier")
 def create_supplier(supplier: schemas.SupplierCreate, db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(
@@ -310,7 +310,7 @@ def create_supplier(supplier: schemas.SupplierCreate, db: Session = Depends(get_
                                 website=supplier.website)
 
 
-@router.get("/suppliers/", response_model=list[schemas.Supplier], tags=["Suppliers Service"], summary="Get all suppliers")
+@router.get("/suppliers/", response_model=list[schemas.Supplier], response_model_exclude_none=True, tags=["Suppliers Service"], summary="Get all suppliers")
 def get_all_suppliers(db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(
@@ -323,7 +323,7 @@ def get_all_suppliers(db: Session = Depends(get_session_local), credentials: HTT
     return crud.get_all_suppliers(db)
 
 
-@router.get("/suppliers/{supplier_id}", response_model=schemas.Supplier, tags=["Suppliers Service"], summary="Get supplier by ID")
+@router.get("/suppliers/{supplier_id}", response_model=schemas.Supplier, response_model_exclude_none=True, tags=["Suppliers Service"], summary="Get supplier by ID")
 def get_supplier_by_id(supplier_id: str, db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(
@@ -348,7 +348,7 @@ def get_supplier_by_id(supplier_id: str, db: Session = Depends(get_session_local
     return crud.get_supplier_by_id(db, supplier_uuid)
 
 
-@router.patch("/suppliers/{supplier_id}", response_model=schemas.Supplier, tags=["Suppliers Service"], summary="Update supplier by ID")
+@router.patch("/suppliers/{supplier_id}", response_model=schemas.Supplier, response_model_exclude_none=True, tags=["Suppliers Service"], summary="Update supplier by ID")
 def patch_supplier(supplier_id: str, supplier: schemas.SupplierUpdate, db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(
@@ -420,7 +420,7 @@ def delete_supplier(supplier_id: str, db: Session = Depends(get_session_local), 
     return crud.delete_supplier(db, supplier_uuid)
 
 
-@router.get("/search_suppliers/", response_model=list[schemas.Supplier], tags=["Suppliers Service"], summary="Search suppliers by name")
+@router.get("/search_suppliers/", response_model=list[schemas.Supplier], response_model_exclude_none=True, tags=["Suppliers Service"], summary="Search suppliers by name")
 def search_suppliers(name: str, db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(token)

@@ -126,11 +126,11 @@ export type Supplier = {
   name: string;
   contact_name: string;
   contact_email: string;
-  phone_number: string | null;
-  address: string | null;
-  country: string | null;
-  city: string | null;
-  website: string | null;
+  phone_number?: string;
+  address?: string;
+  country?: string;
+  city?: string;
+  website?: string;
 };
 
 export type CartItem = {

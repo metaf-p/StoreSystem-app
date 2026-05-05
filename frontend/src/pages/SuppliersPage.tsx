@@ -728,11 +728,11 @@ function supplierToForm(supplier: Supplier): SupplierFormState {
     name: supplier.name,
     contactName: supplier.contact_name,
     contactEmail: supplier.contact_email,
-    phoneNumber: supplier.phone_number || "",
-    address: supplier.address || "",
-    country: supplier.country || "",
-    city: supplier.city || "",
-    website: supplier.website || "",
+    phoneNumber: supplier.phone_number ?? "",
+    address: supplier.address ?? "",
+    country: supplier.country ?? "",
+    city: supplier.city ?? "",
+    website: supplier.website ?? "",
   };
 }
 
