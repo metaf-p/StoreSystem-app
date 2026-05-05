@@ -21,8 +21,7 @@
 - [auth_service/app/auth.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/app/auth.py)
 - [auth_service/app/routes.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/app/routes.py)
 - [auth_service/main.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/main.py)
-- [auth_service/static/js/auth.js](/Users/metaf/Dev/git/StoreSystem-app/auth_service/static/js/auth.js)
-- [auth_service/static/js/form_login.js](/Users/metaf/Dev/git/StoreSystem-app/auth_service/static/js/form_login.js)
+- frontend bundle, served under `/app/*`
 
 ## Что хранится на клиенте
 
@@ -38,7 +37,7 @@
 - хранится в cookie `refresh_token`;
 - ставится сервером через `Set-Cookie`;
 - имеет флаги `HttpOnly`, `SameSite=Lax`, `Path=/`;
-- в локальной разработке ставится с `Secure=false`;
+- `Secure` выставляется динамически: `true` для HTTPS/production, `false` для локальной разработки без HTTPS;
 - не читается из JavaScript.
 
 `user_id`:
@@ -52,7 +51,7 @@
 
 - хранится в таблице `users.role`;
 - запрашивается через `/me` или `/verify-token`;
-- обновляется для UI через polling в `check_superadmin.js`.
+- обновляется для UI через polling в role-state module, который живет во фронтенд-бандле.
 
 ## Login flow
 
@@ -173,7 +172,7 @@ customer < operator < admin
 
 Access token не содержит role claim. Это сделано намеренно: если роль пользователя изменилась, новый статус должен применяться сразу на следующем запросе к `/me` или `/verify-token`, а не после истечения access token.
 
-UI получает роль через `/me` и обновляет видимость элементов через `check_superadmin.js`.
+UI получает роль через `/me` и обновляет видимость элементов через role-state module во фронтенд-бандле.
 
 ## Logout
 
@@ -211,6 +210,8 @@ Logout отзывает refresh token. Уже выданный access token ос
 5. UI сам вызовет `/refresh-token` и получит access token.
 
 В браузер не нужно класть `access_token` или `user_id`.
+
+Практический мост для Selenide/JUnit5: сначала берется `refresh_token` из ответа `POST /login`, потом он добавляется как cookie в браузер на тот же origin, где открыт UI.
 
 ## Диаграмма
 
