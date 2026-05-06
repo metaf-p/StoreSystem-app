@@ -10,3 +10,8 @@
 !.env.example
 .playwright-mcp/
 logs/*.log
+
+__pycache__/
+*.py[cod]
+
+products_service/uploads/supplier_documents/
