@@ -26,6 +26,14 @@ export type PaginatedUsersResponse = {
   total_pages: number;
 };
 
+export type PaginatedProductsResponse = {
+  products: Product[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+};
+
 export type LoginResponse = {
   user_id: string;
   message: string;
@@ -192,11 +200,11 @@ export type SupplierDocument = {
   supplier_id: string;
   document_type: SupplierDocumentType;
   original_filename: string;
-  content_type: string | null;
+  content_type?: string;
   file_size: number;
   uploaded_by: string;
   created_at: string;
-  description: string | null;
+  description?: string;
 };
 
 export type Chat = {

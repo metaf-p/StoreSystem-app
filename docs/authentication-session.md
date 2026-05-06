@@ -189,14 +189,14 @@ Cookie: refresh_token=<jwt>
 
 Logout отзывает refresh token. Уже выданный access token остается валидным до `exp`, потому что access JWT проверяется stateless.
 
-## Single-session behavior
+## Multiple refresh sessions
 
-В таблице `tokens` первичный ключ - `user_id`. Поэтому у пользователя сейчас одна refresh-сессия.
+В таблице `tokens` primary key теперь `refresh_token`, поэтому у одного пользователя может быть несколько активных refresh-сессий.
 
 Новый login тем же пользователем:
 
-- перезаписывает строку в `tokens`;
-- делает старый refresh token недействительным;
+- добавляет новую строку в `tokens`;
+- не инвалидирует refresh token из другого браузера или другого origin;
 - не отзывает уже выданный access token мгновенно.
 
 ## Прогретая UI-сессия для автотестов
@@ -225,7 +225,7 @@ sequenceDiagram
 
     U->>F: Вводит email/password
     F->>A: POST /login
-    A->>D: Проверка пользователя, upsert refresh session
+    A->>D: Проверка пользователя, insert refresh session
     A-->>F: JSON access_token + user_id
     A-->>F: Set-Cookie refresh_token HttpOnly
     F->>F: Redirect /products

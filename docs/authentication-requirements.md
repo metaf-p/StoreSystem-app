@@ -76,7 +76,7 @@ Refresh token cookie должна иметь:
 - не возвращать `refresh_token` в JSON;
 - устанавливать `refresh_token` через `Set-Cookie`.
 
-Новый login того же пользователя должен перезаписывать refresh session пользователя.
+Новый login того же пользователя должен создавать отдельную refresh session и не инвалидировать другие активные refresh sessions.
 
 ## Refresh requirements
 
@@ -157,4 +157,4 @@ Chat WebSocket должен:
 - Изменение роли пользователя видно на следующем `/me` или `/verify-token`.
 - Logout удаляет refresh session и cookie.
 - После logout refresh token больше не выдает новый access token.
-- Новый login того же пользователя инвалидирует старый refresh token.
+- Новый login того же пользователя не инвалидирует refresh token из другого browser session или origin.

@@ -1,11 +1,10 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createProduct,
   deleteProduct,
   getProduct,
   listProducts,
   listSuppliers,
-  searchProducts,
   updateProduct,
   uploadImage,
 } from "../api/products";
@@ -54,34 +53,91 @@ const emptyProductForm: ProductFormState = {
   manufacturer: "",
 };
 
+const PRODUCTS_PAGE_SIZE = 10;
+
 export function ProductsPage() {
   const { accessToken, authorizedFetch, refreshAccessToken } = useAuth();
   const toast = useToast();
   const [products, setProducts] = useState<Product[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [searchName, setSearchName] = useState("");
+  const [appliedSearchName, setAppliedSearchName] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [tableError, setTableError] = useState("");
+  const [loadMoreError, setLoadMoreError] = useState("");
+  const [page, setPage] = useState(1);
+  const [totalProducts, setTotalProducts] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
   const [formMode, setFormMode] = useState<"create" | "edit" | null>(null);
   const [form, setForm] = useState<ProductFormState>(emptyProductForm);
   const [formErrors, setFormErrors] = useState<ProductFormErrors>({});
   const [detailsProduct, setDetailsProduct] = useState<Product | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<Product | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const loadMoreSentinelRef = useRef<HTMLTableRowElement | null>(null);
+  const productsRequestId = useRef(0);
 
-  const loadProducts = useCallback(async () => {
-    setLoading(true);
-    setTableError("");
-    try {
-      setProducts(await listProducts(authorizedFetch));
-    } catch (error) {
-      const message = getErrorMessage(error);
-      setTableError(message);
-      toast.danger(message);
-    } finally {
-      setLoading(false);
-    }
-  }, [authorizedFetch, toast]);
+  const loadProductsPage = useCallback(
+    async ({ query, nextPage, append }: { query: string; nextPage: number; append: boolean }) => {
+      const requestId = ++productsRequestId.current;
+
+      if (append) {
+        setLoadingMore(true);
+        setLoadMoreError("");
+      } else {
+        setLoading(true);
+        setTableError("");
+        setLoadMoreError("");
+        setProducts([]);
+        setPage(1);
+        setTotalProducts(0);
+        setTotalPages(0);
+      }
+
+      try {
+        const response = await listProducts(authorizedFetch, {
+          page: nextPage,
+          limit: PRODUCTS_PAGE_SIZE,
+          name: query || undefined,
+        });
+
+        if (productsRequestId.current !== requestId) {
+          return;
+        }
+
+        setProducts((current) => (append ? [...current, ...response.products] : response.products));
+        setPage(response.page);
+        setTotalProducts(response.total);
+        setTotalPages(response.total_pages);
+
+        if (!append && query && response.products.length === 0) {
+          toast.info("Продукты не найдены");
+        }
+      } catch (error) {
+        if (productsRequestId.current !== requestId) {
+          return;
+        }
+
+        const message = getErrorMessage(error);
+        if (append) {
+          setLoadMoreError(message);
+        } else {
+          setTableError(message);
+        }
+        toast.danger(message);
+      } finally {
+        if (productsRequestId.current === requestId) {
+          if (append) {
+            setLoadingMore(false);
+          } else {
+            setLoading(false);
+          }
+        }
+      }
+    },
+    [authorizedFetch, toast],
+  );
 
   const loadSuppliers = useCallback(async () => {
     try {
@@ -91,13 +147,51 @@ export function ProductsPage() {
     }
   }, [authorizedFetch, toast]);
 
+  const reloadProducts = useCallback(
+    async (query: string) => {
+      await loadProductsPage({ query, nextPage: 1, append: false });
+    },
+    [loadProductsPage],
+  );
+
+  const loadNextPage = useCallback(async () => {
+    if (loading || loadingMore || tableError || page >= totalPages) {
+      return;
+    }
+
+    await loadProductsPage({ query: appliedSearchName, nextPage: page + 1, append: true });
+  }, [appliedSearchName, loadProductsPage, loading, loadingMore, page, tableError, totalPages]);
+
   useEffect(() => {
-    void loadProducts();
-  }, [loadProducts]);
+    void reloadProducts("");
+  }, [reloadProducts]);
 
   useEffect(() => {
     void loadSuppliers();
   }, [loadSuppliers]);
+
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current;
+    if (!sentinel || loading || loadingMore || tableError || loadMoreError || products.length === 0 || page >= totalPages) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          void loadNextPage();
+        }
+      },
+      {
+        root: null,
+        rootMargin: "200px 0px",
+        threshold: 0.1,
+      },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadMoreError, loadNextPage, loading, loadingMore, page, products.length, tableError, totalPages]);
 
   const openCreateModal = async () => {
     setForm(emptyProductForm);
@@ -128,23 +222,9 @@ export function ProductsPage() {
 
   const onSearch = async (event: FormEvent) => {
     event.preventDefault();
-    setLoading(true);
-    setTableError("");
-    try {
-      const nextProducts = searchName.trim()
-        ? await searchProducts(authorizedFetch, searchName.trim())
-        : await listProducts(authorizedFetch);
-      setProducts(nextProducts);
-      if (nextProducts.length === 0) {
-        toast.info("Продукты не найдены");
-      }
-    } catch (error) {
-      const message = getErrorMessage(error);
-      setTableError(message);
-      toast.danger(message);
-    } finally {
-      setLoading(false);
-    }
+    const nextSearch = searchName.trim();
+    setAppliedSearchName(nextSearch);
+    await reloadProducts(nextSearch);
   };
 
   const onDelete = async () => {
@@ -155,7 +235,7 @@ export function ProductsPage() {
     try {
       await deleteProduct(authorizedFetch, deleteCandidate.product_id);
       setDeleteCandidate(null);
-      await loadProducts();
+      await reloadProducts(appliedSearchName);
       toast.success("Продукт удален");
     } catch (error) {
       toast.danger(getErrorMessage(error));
@@ -199,7 +279,7 @@ export function ProductsPage() {
 
       setFormMode(null);
       setForm(emptyProductForm);
-      await loadProducts();
+      await reloadProducts(appliedSearchName);
     } catch (error) {
       toast.danger(getErrorMessage(error));
     } finally {
@@ -251,6 +331,9 @@ export function ProductsPage() {
       <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-lg shadow-slate-900/5">
         <div className="border-b border-border px-6 py-4">
           <h2 className="text-lg font-semibold tracking-tight">Список продуктов</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {totalProducts > 0 ? `Показано ${products.length} из ${totalProducts} товаров` : "Список подгружается по мере прокрутки."}
+          </p>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[980px] border-separate border-spacing-0">
@@ -264,39 +347,106 @@ export function ProductsPage() {
                 <th className="px-6 py-4 text-center">Действия</th>
               </tr>
             </thead>
-            <TableState loading={loading} error={tableError} empty={products.length === 0} emptyMessage="Продукты не найдены" colSpan={6}>
-              {products.map((product) => (
-                <tr key={product.product_id} className="border-t border-border/60 text-sm">
-                  <td className="max-w-[230px] whitespace-nowrap px-6 py-4 align-top font-mono text-xs text-muted-foreground">
-                    {product.product_id}
-                  </td>
-                  <td className="px-6 py-4">
-                    <button
-                      className="block max-w-[220px] truncate text-left font-medium text-primary underline-offset-4 hover:underline"
-                      type="button"
-                      onClick={() => openDetails(product.product_id)}
-                    >
-                      {product.name}
-                    </button>
-                  </td>
-                  <td className="px-6 py-4 align-top text-muted-foreground">{product.description || ""}</td>
-                  <td className="px-6 py-4 align-top">{product.category || ""}</td>
-                  <td className="px-6 py-4 align-top">{product.price} руб</td>
-                  <td className="px-6 py-4 text-center align-top">
-                    <RoleGuard minRole="operator">
-                      <div className="flex flex-col justify-center gap-2 sm:flex-row">
-                        <Button variant="outline-warning" size="sm" type="button" onClick={() => openEditModal(product.product_id)}>
-                          Редактировать
-                        </Button>
-                        <Button variant="outline-danger" size="sm" type="button" onClick={() => setDeleteCandidate(product)}>
-                          Удалить
+            {loading || (tableError && products.length === 0) || (!loading && products.length === 0) ? (
+              <TableState loading={loading} error={tableError} empty={products.length === 0} emptyMessage="Продукты не найдены" colSpan={6}>
+                {products.map((product) => (
+                  <tr key={product.product_id} className="border-t border-border/60 text-sm">
+                    <td className="max-w-[230px] whitespace-nowrap px-6 py-4 align-top font-mono text-xs text-muted-foreground">
+                      {product.product_id}
+                    </td>
+                    <td className="px-6 py-4">
+                      <button
+                        className="block max-w-[220px] truncate text-left font-medium text-primary underline-offset-4 hover:underline"
+                        type="button"
+                        onClick={() => openDetails(product.product_id)}
+                      >
+                        {product.name}
+                      </button>
+                    </td>
+                    <td className="px-6 py-4 align-top text-muted-foreground">{product.description || ""}</td>
+                    <td className="px-6 py-4 align-top">{product.category || ""}</td>
+                    <td className="px-6 py-4 align-top">{product.price} руб</td>
+                    <td className="px-6 py-4 text-center align-top">
+                      <RoleGuard minRole="operator">
+                        <div className="flex flex-col justify-center gap-2 sm:flex-row">
+                          <Button variant="outline-warning" size="sm" type="button" onClick={() => openEditModal(product.product_id)}>
+                            Редактировать
+                          </Button>
+                          <Button variant="outline-danger" size="sm" type="button" onClick={() => setDeleteCandidate(product)}>
+                            Удалить
+                          </Button>
+                        </div>
+                      </RoleGuard>
+                    </td>
+                  </tr>
+                ))}
+              </TableState>
+            ) : (
+              <tbody>
+                {products.map((product) => (
+                  <tr key={product.product_id} className="border-t border-border/60 text-sm">
+                    <td className="max-w-[230px] whitespace-nowrap px-6 py-4 align-top font-mono text-xs text-muted-foreground">
+                      {product.product_id}
+                    </td>
+                    <td className="px-6 py-4">
+                      <button
+                        className="block max-w-[220px] truncate text-left font-medium text-primary underline-offset-4 hover:underline"
+                        type="button"
+                        onClick={() => openDetails(product.product_id)}
+                      >
+                        {product.name}
+                      </button>
+                    </td>
+                    <td className="px-6 py-4 align-top text-muted-foreground">{product.description || ""}</td>
+                    <td className="px-6 py-4 align-top">{product.category || ""}</td>
+                    <td className="px-6 py-4 align-top">{product.price} руб</td>
+                    <td className="px-6 py-4 text-center align-top">
+                      <RoleGuard minRole="operator">
+                        <div className="flex flex-col justify-center gap-2 sm:flex-row">
+                          <Button variant="outline-warning" size="sm" type="button" onClick={() => openEditModal(product.product_id)}>
+                            Редактировать
+                          </Button>
+                          <Button variant="outline-danger" size="sm" type="button" onClick={() => setDeleteCandidate(product)}>
+                            Удалить
+                          </Button>
+                        </div>
+                      </RoleGuard>
+                    </td>
+                  </tr>
+                ))}
+                {loadMoreError ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-6 text-center text-sm text-destructive">
+                      <div className="flex flex-col items-center gap-3">
+                        <p>{loadMoreError}</p>
+                        <Button variant="outline-secondary" size="sm" type="button" onClick={() => void loadNextPage()}>
+                          Повторить загрузку
                         </Button>
                       </div>
-                    </RoleGuard>
-                  </td>
-                </tr>
-              ))}
-            </TableState>
+                    </td>
+                  </tr>
+                ) : page < totalPages ? (
+                  <tr ref={loadMoreSentinelRef}>
+                    <td colSpan={6} className="px-6 py-6 text-center text-sm text-muted-foreground">
+                      {loadingMore ? (
+                        <div className="inline-flex items-center gap-3">
+                          <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-r-transparent" role="status" />
+                          Загружаем еще товары...
+                        </div>
+                      ) : (
+                        "Прокрутите вниз, чтобы подгрузить еще товары"
+                      )}
+                    </td>
+                  </tr>
+                ) : (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-6 text-center text-sm text-muted-foreground">
+                      Загружены все товары
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            )}
           </table>
         </div>
       </div>

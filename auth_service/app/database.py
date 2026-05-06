@@ -22,6 +22,7 @@ def init_db():
     # Регистрируем таблицы из единого metadata объекта моделей.
     models.Base.metadata.create_all(bind=engine)
     migrate_user_roles()
+    migrate_refresh_sessions()
     seed_superadmin()
 
 
@@ -44,6 +45,34 @@ def migrate_user_roles():
         connection.execute(text(
             "UPDATE users SET role = 'customer' WHERE role NOT IN ('customer', 'operator', 'admin')"
         ))
+
+
+def migrate_refresh_sessions():
+    inspector = inspect(engine)
+    if "tokens" not in inspector.get_table_names():
+        return
+
+    pk_constraint = inspector.get_pk_constraint("tokens") or {}
+    pk_columns = pk_constraint.get("constrained_columns") or []
+    if pk_columns == ["refresh_token"]:
+        with engine.begin() as connection:
+            connection.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_tokens_user_id ON tokens (user_id)"
+            ))
+        return
+
+    if pk_columns != ["user_id"]:
+        return
+
+    pk_name = pk_constraint.get("name") or "tokens_pkey"
+    with engine.begin() as connection:
+        connection.execute(text(f'ALTER TABLE tokens DROP CONSTRAINT "{pk_name}"'))
+        connection.execute(text("ALTER TABLE tokens ADD PRIMARY KEY (refresh_token)"))
+        connection.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_tokens_user_id ON tokens (user_id)"
+        ))
+
+    logger.log_message("Migrated tokens table to allow multiple refresh sessions per user.")
 
 
 def seed_superadmin():

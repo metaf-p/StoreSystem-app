@@ -64,6 +64,9 @@ const emptyDocumentForm: SupplierDocumentFormState = {
   file: null,
 };
 
+const supplierDocumentFileAccept = ".pdf,.docx,.png,.jpg,.jpeg,.xls,.xlsx";
+const supplierDocumentFileHint = "Разрешены PDF, DOCX, PNG, JPG, JPEG, XLS и XLSX.";
+
 const documentTypeLabels: Record<SupplierDocumentType, string> = {
   contract: "Договор",
   certificate: "Сертификат",
@@ -642,7 +645,9 @@ function SupplierDocumentsModal({
             name="document-file"
             label="Файл документа (обязательно)"
             error={documentFormErrors.file}
+            hint={supplierDocumentFileHint}
             required
+            accept={supplierDocumentFileAccept}
             onChange={(event) => setField("file", event.target.files?.[0] || null)}
           />
           <div className="flex justify-end">

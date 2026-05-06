@@ -7,8 +7,25 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from datetime import datetime
 from app.kafka import send_to_kafka
 from uuid import UUID
+from typing import Optional
 
 # ---- CRUD операции для товаров (Products) ----
+
+
+def _products_query(db: Session, name: Optional[str] = None):
+    query = db.query(models.Product).filter(models.Product.is_available == True)
+
+    if name and name.strip():
+        query = query.filter(models.Product.name.ilike(f"%{name.strip()}%"))
+
+    return query
+
+
+def _serialize_products(products):
+    for product in products:
+        product.product_id = str(product.product_id)
+        product.supplier_id = str(product.supplier_id)
+    return products
 
 
 def create_product(db: Session, user_id: str, name: str, description: str, category: str, price: float, stock_quantity: int, supplier_id: str, image_url: str, weight: float, dimensions: str, manufacturer: str):
@@ -57,15 +74,28 @@ def create_product(db: Session, user_id: str, name: str, description: str, categ
 
 def get_all_products(db: Session):
     try:
-        products = db.query(models.Product).filter(
-            models.Product.is_available == True).all()
+        products = (
+            _products_query(db)
+            .order_by(models.Product.created_at.desc(), models.Product.product_id.asc())
+            .all()
+        )
+        return _serialize_products(products)
+    except SQLAlchemyError as e:
+        raise HTTPException(
+            status_code=500, detail=f"Database error: {str(e)}")
 
-        # Преобразуем UUID поля в строки для каждого продукта
-        for product in products:
-            product.product_id = str(product.product_id)
-            product.supplier_id = str(product.supplier_id)
 
-        return products
+def get_products_page(db: Session, page: int, limit: int, name: Optional[str] = None):
+    try:
+        query = _products_query(db, name)
+        total = query.count()
+        products = (
+            query.order_by(models.Product.created_at.desc(), models.Product.product_id.asc())
+            .offset((page - 1) * limit)
+            .limit(limit)
+            .all()
+        )
+        return _serialize_products(products), total
     except SQLAlchemyError as e:
         raise HTTPException(
             status_code=500, detail=f"Database error: {str(e)}")
@@ -150,10 +180,12 @@ def delete_product(db: Session, product_id: str):
 
 
 def search_products_by_name(db: Session, name: str):
-    return db.query(models.Product).filter(
-        models.Product.name.ilike(f"%{name}%"),
-        models.Product.is_available == True
-    ).all()
+    products = (
+        _products_query(db, name)
+        .order_by(models.Product.created_at.desc(), models.Product.product_id.asc())
+        .all()
+    )
+    return _serialize_products(products)
 
 # ---- CRUD операции для поставщиков (Suppliers) ----
 

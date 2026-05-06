@@ -198,9 +198,9 @@ def delete_user(db: Session, user_id: str):  # Удаление пользова
     user_email = user.email
 
     # Удаляем связанные токены пользователя
-    token = db.query(Token).filter(Token.user_id == str(user_id)).first()
-    if token:
-        db.delete(token)
+    db.query(Token).filter(Token.user_id == str(user_id)).delete(
+        synchronize_session=False
+    )
 
     drop_role_for_user(db, user_email)
     db.delete(user)

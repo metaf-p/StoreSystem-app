@@ -42,11 +42,11 @@ type SupplierDocument = {
   supplier_id: string;
   document_type: string;
   original_filename: string;
-  content_type: string | null;
+  content_type?: string;
   file_size: number;
   uploaded_by: string;
   created_at: string;
-  description: string | null;
+  description?: string;
 };
 
 type Warehouse = {
@@ -396,11 +396,9 @@ const sampleSupplierDocuments: SupplierDocument[] = [
     supplier_id: "supplier-1",
     document_type: "contract",
     original_filename: "contract.pdf",
-    content_type: "application/pdf",
     file_size: 2048,
     uploaded_by: "user-operator",
     created_at: "2026-04-26T10:00:00.000Z",
-    description: "Demo contract",
   },
 ];
 
@@ -636,16 +634,44 @@ test("customer gets redirected from pending approval to products", async ({ page
 });
 
 test("products page renders for operator and shows write controls", async ({ page }) => {
-  await mockOperatorSession(page, sampleProducts, sampleSuppliers);
+  const state = await mockOperatorSession(page, sampleProducts, sampleSuppliers);
 
   await page.goto("/app/products");
 
   await expect(page.getByRole("heading", { name: "Управление продуктами" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Добавить новый продукт" })).toBeVisible();
   await expect(page.getByText("Test Product")).toBeVisible();
+  await expect.poll(() => Promise.resolve(state.requestLog[0])).toBe("http://localhost:8002/products/?page=1&limit=10");
   await page.getByRole("button", { name: "Test Product" }).click();
-  await expect(page.getByText("Поставщик:")).toBeVisible();
+  await expect(page.getByText("Поставщик", { exact: true })).toBeVisible();
   await expect(page.getByText("Demo Supplier")).toBeVisible();
+});
+
+test("products page loads more items when scrolled to the bottom", async ({ page }) => {
+  const paginatedProducts: Product[] = Array.from({ length: 12 }, (_, index) => ({
+    product_id: `paged-product-${index + 1}`,
+    name: `Paged Product ${index + 1}`,
+    description: `Paged description ${index + 1}`,
+    category: "Demo",
+    price: String(100 + index),
+    stock_quantity: 20 + index,
+    supplier_id: "supplier-1",
+    image_url: null,
+    weight: null,
+    dimensions: null,
+    manufacturer: null,
+  }));
+
+  const state = await mockOperatorSession(page, paginatedProducts, sampleSuppliers);
+
+  await page.goto("/app/products");
+
+  await expect(page.getByRole("button", { name: "Paged Product 1", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Paged Product 10", exact: true })).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+
+  await expect.poll(() => Promise.resolve(state.requestLog.some((entry) => entry.includes("page=2&limit=10")))).toBe(true);
+  await expect(page.getByRole("button", { name: "Paged Product 12", exact: true })).toBeVisible();
 });
 
 test("operator sees pending approval table", async ({ page }) => {
@@ -894,6 +920,7 @@ test("suppliers page renders all supplier fields in the table", async ({ page })
   await demoRow.getByRole("button", { name: "Документы" }).click();
   await expect(page.getByRole("heading", { name: "Документы: Demo Supplier" })).toBeVisible();
   await expect(page.getByText("contract.pdf")).toBeVisible();
+  await expect(page.getByLabel("Файл документа (обязательно)")).toHaveAttribute("accept", ".pdf,.docx,.png,.jpg,.jpeg,.xls,.xlsx");
   await expect(page.getByRole("button", { name: "Загрузить документ" })).toBeVisible();
 });
 
@@ -2325,6 +2352,26 @@ async function mockAnonymousSession(page: Page) {
   });
 }
 
+function buildPaginatedProductsResponse(products: Product[], url: URL, defaultLimit = 10) {
+  const rawPage = Number(url.searchParams.get("page") || "1");
+  const rawLimit = Number(url.searchParams.get("limit") || String(defaultLimit));
+  const page = Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1;
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : defaultLimit;
+  const query = url.searchParams.get("name")?.trim().toLowerCase() ?? "";
+  const filteredProducts = query ? products.filter((product) => product.name.toLowerCase().includes(query)) : products;
+  const total = filteredProducts.length;
+  const totalPages = total ? Math.ceil(total / limit) : 0;
+  const startIndex = (page - 1) * limit;
+
+  return {
+    products: filteredProducts.slice(startIndex, startIndex + limit),
+    total,
+    page,
+    page_size: limit,
+    total_pages: totalPages,
+  };
+}
+
 async function mockLoginFailure(page: Page) {
   await page.route("**://localhost:8001/login", async (route) => {
     await fulfillJson(route, 400, { detail: "Invalid email or password" });
@@ -2414,6 +2461,11 @@ async function mockOperatorSession(
   },
 ) {
   let loggedOut = false;
+  const state = {
+    requestLog: [] as string[],
+    products: [...products],
+    nextProductIndex: 1,
+  };
 
   await page.route("**://localhost:8001/refresh-token", async (route) => {
     if (loggedOut) {
@@ -2434,21 +2486,99 @@ async function mockOperatorSession(
     await fulfillJson(route, 200, { detail: "Logged out" });
   });
   await page.route("**://localhost:8002/products/**", async (route) => {
-    const url = route.request().url();
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const method = route.request().method();
 
-    if (options?.productsHandler && url.endsWith("/products/")) {
+    if (options?.productsHandler && path === "/products/" && method === "GET") {
       await options.productsHandler(route);
       return;
     }
 
-    if (url.endsWith("/products/")) {
-      await fulfillJson(route, 200, products);
+    if (path === "/products/" && method === "GET") {
+      state.requestLog.push(url.toString());
+      await fulfillJson(route, 200, buildPaginatedProductsResponse(state.products, url));
       return;
     }
 
-    const productId = url.split("/products/")[1];
-    const product = products.find((entry) => entry.product_id === productId);
-    await fulfillJson(route, product ? 200 : 404, product || { detail: "Product not found" });
+    if (path === "/products/" && method === "POST") {
+      state.requestLog.push("POST /products/");
+      const body = route.request().postDataJSON() as Partial<Product>;
+      const createdProduct: Product = {
+        product_id: `product-new-${state.nextProductIndex++}`,
+        name: body.name || "New Product",
+        description: body.description ?? null,
+        category: body.category ?? null,
+        price: body.price ?? "0",
+        stock_quantity: body.stock_quantity ?? 0,
+        supplier_id: body.supplier_id || suppliers[0]?.supplier_id || "supplier-1",
+        image_url: body.image_url ?? null,
+        weight: body.weight ?? null,
+        dimensions: body.dimensions ?? null,
+        manufacturer: body.manufacturer ?? null,
+      };
+      state.products = [createdProduct, ...state.products];
+      await fulfillJson(route, 201, createdProduct);
+      return;
+    }
+
+    if (path.startsWith("/products/") && method === "PUT") {
+      const productId = path.replace("/products/", "");
+      state.requestLog.push(`PUT /products/${productId}`);
+      const existingProduct = state.products.find((entry) => entry.product_id === productId);
+      if (!existingProduct) {
+        await fulfillJson(route, 404, { detail: "Product not found" });
+        return;
+      }
+
+      const body = route.request().postDataJSON() as Partial<Product>;
+      const updatedProduct: Product = {
+        ...existingProduct,
+        name: body.name ?? existingProduct.name,
+        description: body.description ?? existingProduct.description,
+        category: body.category ?? existingProduct.category,
+        price: body.price ?? existingProduct.price,
+        stock_quantity: body.stock_quantity ?? existingProduct.stock_quantity,
+        supplier_id: body.supplier_id ?? existingProduct.supplier_id,
+        image_url: body.image_url ?? existingProduct.image_url,
+        weight: body.weight ?? existingProduct.weight,
+        dimensions: body.dimensions ?? existingProduct.dimensions,
+        manufacturer: body.manufacturer ?? existingProduct.manufacturer,
+      };
+      state.products = state.products.map((entry) => (entry.product_id === productId ? updatedProduct : entry));
+      await fulfillJson(route, 200, updatedProduct);
+      return;
+    }
+
+    if (path.startsWith("/products/") && method === "DELETE") {
+      const productId = path.replace("/products/", "");
+      state.requestLog.push(`DELETE /products/${productId}`);
+      state.products = state.products.filter((entry) => entry.product_id !== productId);
+      await fulfillJson(route, 200, { detail: "Deleted" });
+      return;
+    }
+
+    if (path.startsWith("/products/") && method === "GET") {
+      const productId = path.replace("/products/", "");
+      state.requestLog.push(`GET /products/${productId}`);
+      const product = state.products.find((entry) => entry.product_id === productId);
+      await fulfillJson(route, product ? 200 : 404, product || { detail: "Product not found" });
+      return;
+    }
+
+    await route.fallback();
+  });
+  await page.route("**://localhost:8002/search_products/**", async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const method = route.request().method();
+
+    if (path === "/search_products/" && method === "GET") {
+      await fulfillJson(route, 200, buildPaginatedProductsResponse(state.products, url));
+      return;
+    }
+
+    await route.fallback();
   });
   await page.route("**://localhost:8002/search_suppliers/**", async (route) => {
     const query = new URL(route.request().url()).searchParams.get("name")?.trim().toLowerCase() ?? "";
@@ -2514,6 +2644,8 @@ async function mockOperatorSession(
 
     await fulfillJson(route, 200, suppliers);
   });
+
+  return state;
 }
 
 async function mockCatalogSession(
@@ -2906,17 +3038,30 @@ async function mockWarehousesSession(
   await page.route("**://localhost:8002/products/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
+    const method = route.request().method();
 
-    if (path === "/products/" && route.request().method() === "GET") {
-      await fulfillJson(route, 200, state.products);
+    if (path === "/products/" && method === "GET") {
+      await fulfillJson(route, 200, buildPaginatedProductsResponse(state.products, url));
       return;
     }
 
-    if (path.startsWith("/products/") && route.request().method() === "GET") {
+    if (path.startsWith("/products/") && method === "GET") {
       const productId = path.replace("/products/", "");
       const product = state.products.find((entry) => entry.product_id === productId);
       state.requestLog.push(`GET /products/${productId}`);
       await fulfillJson(route, product ? 200 : 404, product || { detail: "Product not found" });
+      return;
+    }
+
+    await route.fallback();
+  });
+  await page.route("**://localhost:8002/search_products/**", async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const method = route.request().method();
+
+    if (path === "/search_products/" && method === "GET") {
+      await fulfillJson(route, 200, buildPaginatedProductsResponse(state.products, url));
       return;
     }
 
@@ -3588,16 +3733,35 @@ async function mockCustomerSession(page: Page, products: Product[], suppliers: S
     await fulfillJson(route, 200, { detail: "Logged out" });
   });
   await page.route("**://localhost:8002/products/**", async (route) => {
-    const url = route.request().url();
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const method = route.request().method();
 
-    if (url.endsWith("/products/")) {
-      await fulfillJson(route, 200, products);
+    if (path === "/products/" && method === "GET") {
+      await fulfillJson(route, 200, buildPaginatedProductsResponse(products, url));
       return;
     }
 
-    const productId = url.split("/products/")[1];
-    const product = products.find((entry) => entry.product_id === productId);
-    await fulfillJson(route, product ? 200 : 404, product || { detail: "Product not found" });
+    if (path.startsWith("/products/") && method === "GET") {
+      const productId = path.replace("/products/", "");
+      const product = products.find((entry) => entry.product_id === productId);
+      await fulfillJson(route, product ? 200 : 404, product || { detail: "Product not found" });
+      return;
+    }
+
+    await route.fallback();
+  });
+  await page.route("**://localhost:8002/search_products/**", async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const method = route.request().method();
+
+    if (path === "/search_products/" && method === "GET") {
+      await fulfillJson(route, 200, buildPaginatedProductsResponse(products, url));
+      return;
+    }
+
+    await route.fallback();
   });
   await page.route("**://localhost:8002/search_suppliers/**", async (route) => {
     const query = new URL(route.request().url()).searchParams.get("name")?.trim().toLowerCase() ?? "";

@@ -1,10 +1,11 @@
 # auth.py
 from datetime import datetime, timedelta
+import uuid
 
 from fastapi import HTTPException, status
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import insert
 from sqlalchemy.orm import Session
 
 from app import logger
@@ -26,10 +27,12 @@ def create_tokens(data: dict, db: Session):
         )
 
     issued_at = datetime.utcnow()
+    session_id = str(uuid.uuid4())
 
     to_encode = {
         "sub": user_id,
         "token_type": "access",
+        "jti": session_id,
     }
     access_expire = issued_at + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": access_expire})
@@ -38,6 +41,7 @@ def create_tokens(data: dict, db: Session):
     refresh_token_data = {
         "sub": user_id,
         "token_type": "refresh",
+        "jti": session_id,
     }
     refresh_expire = issued_at + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
     refresh_token_data.update({"exp": refresh_expire})
@@ -53,19 +57,7 @@ def create_tokens(data: dict, db: Session):
         "refresh_expires_at": refresh_expire,
     }
 
-    # Upsert the token row atomically so concurrent logins cannot race between delete and insert.
-    insert_stmt = pg_insert(Token.__table__).values(token_values)
-    upsert_stmt = insert_stmt.on_conflict_do_update(
-        index_elements=[Token.__table__.c.user_id],
-        set_={
-            "access_token": insert_stmt.excluded.access_token,
-            "refresh_token": insert_stmt.excluded.refresh_token,
-            "created_at": insert_stmt.excluded.created_at,
-            "expires_at": insert_stmt.excluded.expires_at,
-            "refresh_expires_at": insert_stmt.excluded.refresh_expires_at,
-        },
-    )
-    db.execute(upsert_stmt)
+    db.execute(insert(Token.__table__).values(token_values))
     db.commit()
 
     logger.log_message(f"Created new access and refresh tokens for: {user_id}")
@@ -131,6 +123,7 @@ def refresh_access_token(refresh_token: str, db: Session):
             {
                 "sub": user_id,
                 "token_type": "access",
+                "jti": str(uuid.uuid4()),
                 "exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
             },
             SECRET_KEY,

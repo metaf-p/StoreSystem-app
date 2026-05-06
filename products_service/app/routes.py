@@ -6,6 +6,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from uuid import UUID, uuid4
 from app import crud, schemas, database, auth, logger, models
+from app.document_validation import (
+    INVALID_DOCUMENT_DETAIL,
+    MAX_SUPPLIER_DOCUMENT_SIZE,
+    InvalidSupplierDocumentError,
+    validate_supplier_document_file,
+)
 from app.models import Product, ProductWarehouse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.database import get_session_local
@@ -32,7 +38,6 @@ ALLOWED_SUPPLIER_DOCUMENT_TYPES = {
     "price_list",
     "other",
 }
-MAX_SUPPLIER_DOCUMENT_SIZE = 10 * 1024 * 1024
 
 
 def _get_user_data(
@@ -114,8 +119,19 @@ async def create_product(product: schemas.ProductCreate, db: Session = Depends(g
                                dimensions=product.dimensions, manufacturer=product.manufacturer)
 
 
-@router.get("/products/", response_model=list[schemas.ProductResponse], tags=["Products Service"], summary="Get all products")
-def get_products(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_session_local)):
+@router.get(
+    "/products/",
+    response_model=schemas.PaginatedProductResponse,
+    tags=["Products Service"],
+    summary="Get products with pagination",
+)
+def get_products(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_session_local),
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1, le=100),
+    name: Optional[str] = Query(default=None, max_length=100),
+):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(
         token)  # Проверяем токен через auth.py
@@ -123,8 +139,16 @@ def get_products(credentials: HTTPAuthorizationCredentials = Depends(security), 
         logger.log_message("Invalid token or unauthorized access")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="Invalid token or unauthorized access")
-    logger.log_message("Getting all products")
-    return crud.get_all_products(db)
+    logger.log_message(f"Getting products page={page}, limit={limit}, name={name or 'all'}")
+    products, total = crud.get_products_page(db, page=page, limit=limit, name=name)
+    total_pages = (total + limit - 1) // limit if total else 0
+    return {
+        "products": products,
+        "total": total,
+        "page": page,
+        "page_size": limit,
+        "total_pages": total_pages,
+    }
 
 
 @router.get("/products/{product_id}", response_model=schemas.ProductResponse, tags=["Products Service"], summary="Get product by ID")
@@ -267,8 +291,19 @@ def delete_product(product_id: str, db: Session = Depends(get_session_local), cr
     return crud.delete_product(db, product_uuid)
 
 
-@router.get("/search_products/", response_model=list[schemas.ProductResponse], tags=["Products Service"], summary="Search products by name")
-def search_products(name: str, db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
+@router.get(
+    "/search_products/",
+    response_model=schemas.PaginatedProductResponse,
+    tags=["Products Service"],
+    summary="Search products by name",
+)
+def search_products(
+    name: str,
+    db: Session = Depends(get_session_local),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1, le=100),
+):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(token)
     if not user_data:
@@ -276,8 +311,16 @@ def search_products(name: str, db: Session = Depends(get_session_local), credent
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="Invalid token or unauthorized access")
 
-    logger.log_message(f"Searching products with name containing '{name}'")
-    return crud.search_products_by_name(db, name)
+    logger.log_message(f"Searching products with name containing '{name}', page={page}, limit={limit}")
+    products, total = crud.get_products_page(db, page=page, limit=limit, name=name)
+    total_pages = (total + limit - 1) // limit if total else 0
+    return {
+        "products": products,
+        "total": total,
+        "page": page,
+        "page_size": limit,
+        "total_pages": total_pages,
+    }
 
 # ---- CRUD операции для поставщиков (Supplier) ----
 
@@ -433,7 +476,13 @@ def search_suppliers(name: str, db: Session = Depends(get_session_local), creden
     return crud.search_suppliers_by_name(db, name)
 
 
-@router.post("/suppliers/{supplier_id}/documents", response_model=schemas.SupplierDocument, tags=["Supplier Documents"], summary="Upload supplier document")
+@router.post(
+    "/suppliers/{supplier_id}/documents",
+    response_model=schemas.SupplierDocument,
+    response_model_exclude_none=True,
+    tags=["Supplier Documents"],
+    summary="Upload supplier document",
+)
 async def upload_supplier_document(
     supplier_id: UUID,
     document_type: str = Form(...),
@@ -447,6 +496,13 @@ async def upload_supplier_document(
 
     if document_type not in ALLOWED_SUPPLIER_DOCUMENT_TYPES:
         raise HTTPException(status_code=422, detail="Invalid document_type")
+    file_bytes = await file.read()
+    if len(file_bytes) > MAX_SUPPLIER_DOCUMENT_SIZE:
+        raise HTTPException(status_code=413, detail="Document size must not exceed 10 MB")
+    try:
+        validate_supplier_document_file(file.filename or "", file.content_type, file_bytes)
+    except InvalidSupplierDocumentError:
+        raise HTTPException(status_code=400, detail=INVALID_DOCUMENT_DETAIL)
 
     document_id = uuid4()
     suffix = Path(file.filename or "").suffix
@@ -455,18 +511,12 @@ async def upload_supplier_document(
     supplier_dir.mkdir(parents=True, exist_ok=True)
     file_path = supplier_dir / stored_filename
 
-    file_size = 0
+    normalized_description = description.strip() if description is not None else None
+    if normalized_description == "":
+        normalized_description = None
     try:
         with file_path.open("wb") as buffer:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                file_size += len(chunk)
-                if file_size > MAX_SUPPLIER_DOCUMENT_SIZE:
-                    raise HTTPException(
-                        status_code=413, detail="Document size must not exceed 10 MB")
-                buffer.write(chunk)
+            buffer.write(file_bytes)
     except HTTPException:
         file_path.unlink(missing_ok=True)
         raise
@@ -480,10 +530,10 @@ async def upload_supplier_document(
         original_filename=file.filename or stored_filename,
         stored_filename=stored_filename,
         content_type=file.content_type,
-        file_size=file_size,
+        file_size=len(file_bytes),
         uploaded_by=user_data["user_id"],
         created_at=datetime.utcnow(),
-        description=description,
+        description=normalized_description,
     )
     db.add(document)
     db.commit()
@@ -491,7 +541,13 @@ async def upload_supplier_document(
     return document
 
 
-@router.get("/suppliers/{supplier_id}/documents", response_model=list[schemas.SupplierDocument], tags=["Supplier Documents"], summary="List supplier documents")
+@router.get(
+    "/suppliers/{supplier_id}/documents",
+    response_model=list[schemas.SupplierDocument],
+    response_model_exclude_none=True,
+    tags=["Supplier Documents"],
+    summary="List supplier documents",
+)
 def list_supplier_documents(
     supplier_id: UUID,
     db: Session = Depends(get_session_local),

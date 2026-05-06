@@ -14,7 +14,7 @@ from jose import jwt
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "auth_service"))
 
-from app import auth
+from app import auth, database
 from app.models import Token
 
 
@@ -36,24 +36,24 @@ class _GuardedSession:
         self.commit_count += 1
 
 
-class _AddBarrierSession:
+class _ExecuteBarrierSession:
     def __init__(self, session, barrier):
         self._session = session
         self._barrier = barrier
-        self._add_calls = 0
+        self._execute_calls = 0
 
-    def add(self, instance):
-        self._add_calls += 1
-        if self._add_calls == 1:
+    def execute(self, statement):
+        self._execute_calls += 1
+        if self._execute_calls == 1:
             self._barrier.wait(timeout=10)
-        return self._session.add(instance)
+        return self._session.execute(statement)
 
     def __getattr__(self, item):
         return getattr(self._session, item)
 
 
 class CreateTokensUnitTest(unittest.TestCase):
-    def test_create_tokens_uses_atomic_upsert(self):
+    def test_create_tokens_inserts_independent_refresh_session(self):
         session = _GuardedSession()
 
         tokens = auth.create_tokens(
@@ -68,9 +68,8 @@ class CreateTokensUnitTest(unittest.TestCase):
                 dialect=postgresql.dialect(),
             )
         ).upper()
-        self.assertIn("ON CONFLICT", sql)
-        self.assertIn("DO UPDATE", sql)
-        self.assertNotIn("DELETE", sql)
+        self.assertIn("INSERT INTO", sql)
+        self.assertNotIn("ON CONFLICT", sql)
         self.assertTrue(tokens["access_token"])
         self.assertTrue(tokens["refresh_token"])
 
@@ -124,6 +123,7 @@ class CreateTokensConcurrencyTest(unittest.TestCase):
         except Exception as exc:
             raise unittest.SkipTest(f"auth postgres is unavailable: {exc}")
 
+        database.migrate_refresh_sessions()
         Token.__table__.create(bind=cls.engine, checkfirst=True)
         cls.session_factory = sessionmaker(bind=cls.engine, autocommit=False, autoflush=False)
 
@@ -150,7 +150,7 @@ class CreateTokensConcurrencyTest(unittest.TestCase):
 
         def worker():
             session = self.session_factory()
-            wrapped_session = _AddBarrierSession(session, barrier)
+            wrapped_session = _ExecuteBarrierSession(session, barrier)
             try:
                 tokens = auth.create_tokens(
                     {"sub": self.user_id},
@@ -178,11 +178,12 @@ class CreateTokensConcurrencyTest(unittest.TestCase):
 
         session = self.session_factory()
         try:
-            row = session.query(Token).filter(Token.user_id == self.user_id).one()
+            rows = session.query(Token).filter(Token.user_id == self.user_id).all()
             returned_access_tokens = {result["access_token"] for result in results}
             returned_refresh_tokens = {result["refresh_token"] for result in results}
-            self.assertIn(row.access_token, returned_access_tokens)
-            self.assertIn(row.refresh_token, returned_refresh_tokens)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual({row.access_token for row in rows}, returned_access_tokens)
+            self.assertEqual({row.refresh_token for row in rows}, returned_refresh_tokens)
         finally:
             session.close()
 

@@ -1,5 +1,13 @@
+function currentOriginFallback(defaultUrl: string) {
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin.replace(/\/$/, "");
+  }
+
+  return defaultUrl;
+}
+
 export const AUTH_API_URL =
-  import.meta.env.VITE_AUTH_API_URL?.replace(/\/$/, "") || "http://localhost:8001";
+  import.meta.env.VITE_AUTH_API_URL?.replace(/\/$/, "") || currentOriginFallback("http://localhost:8001");
 
 export const PRODUCTS_API_URL =
   import.meta.env.VITE_PRODUCTS_API_URL?.replace(/\/$/, "") || "http://localhost:8002";

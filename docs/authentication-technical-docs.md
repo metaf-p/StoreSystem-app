@@ -32,14 +32,14 @@ Refresh-сессии хранятся в таблице `tokens`.
 
 Поля:
 
-- `user_id` - primary key, один refresh token на пользователя;
+- `refresh_token` - primary key, текущий refresh JWT в этой session;
+- `user_id` - indexed поле владельца session;
 - `access_token` - последний выданный access token, хранится для совместимости;
-- `refresh_token` - текущий refresh token пользователя;
 - `created_at` - время создания пары токенов;
 - `expires_at` - срок действия последнего access token;
 - `refresh_expires_at` - срок действия refresh token.
 
-Так как `user_id` является primary key, новый login того же пользователя перезаписывает предыдущую refresh-сессию.
+Так как `refresh_token` является primary key, один пользователь может иметь несколько активных refresh-сессий одновременно.
 
 ## Создание токенов
 
@@ -51,6 +51,7 @@ Access JWT payload:
 {
   "sub": "user-uuid",
   "token_type": "access",
+  "jti": "session-id",
   "exp": 1710000000
 }
 ```
@@ -61,6 +62,7 @@ Refresh JWT payload:
 {
   "sub": "user-uuid",
   "token_type": "refresh",
+  "jti": "session-id",
   "exp": 1710000000
 }
 ```
@@ -71,7 +73,7 @@ Refresh JWT payload:
 HS256 SECRET_KEY
 ```
 
-`create_tokens()` делает PostgreSQL upsert в `tokens` по `user_id`.
+`create_tokens()` делает PostgreSQL insert в `tokens` с новой refresh session.
 
 ## `POST /login`
 
@@ -120,7 +122,7 @@ refresh_token
 2. Декодировать refresh JWT.
 3. Проверить `token_type=refresh`.
 4. Проверить `sub`.
-5. Найти строку в `tokens` по `user_id`, `refresh_token`, `refresh_expires_at > now`.
+5. Найти строку в `tokens` по `refresh_token` и `refresh_expires_at > now`.
 6. Выпустить новый access JWT.
 7. Обновить `tokens.access_token` и `tokens.expires_at`.
 8. Вернуть `user_id` и `access_token`.
@@ -318,7 +320,7 @@ FastAPI генерирует схемы ответов из `schemas.py`.
 
 ## Известные ограничения
 
-- Сейчас хранится одна refresh-сессия на пользователя.
+- Refresh-сессии теперь независимы между браузерами и origins; один пользователь может иметь несколько active sessions.
 - Logout не отзывает уже выданный access token мгновенно.
 - Refresh token rotation не реализован: при refresh обновляется access token, но не refresh token.
 - Используется симметричный `HS256`; все сервисы с локальной JWT-проверкой должны знать общий `SECRET_KEY`.

@@ -168,6 +168,14 @@ class ProductResponse(BaseModel):
         orm_mode = True
 
 
+class PaginatedProductResponse(BaseModel):
+    products: list[ProductResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
 class ProductCreate(ProductBase):
     pass
 
@@ -464,6 +472,17 @@ class SupplierDocument(BaseModel):
 
     class Config:
         orm_mode = True
+        schema_extra = {
+            "example": {
+                "document_id": "2d9f0a10-7d8f-4d1a-9c9f-3f9b1c2f4e11",
+                "supplier_id": "8d14a7ed-353c-4d58-9990-301d4c79665e",
+                "document_type": "contract",
+                "original_filename": "contract.pdf",
+                "file_size": 2048,
+                "uploaded_by": "user-operator",
+                "created_at": "2026-04-26T10:00:00Z",
+            }
+        }
 
 
 class SupplierSearch(BaseModel):

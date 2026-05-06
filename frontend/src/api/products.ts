@@ -1,15 +1,50 @@
 import { PRODUCTS_API_URL } from "../config";
 import { parseApiResponse } from "../lib/http";
-import type { Product, ProductPayload, Supplier } from "../types";
+import type { PaginatedProductsResponse, Product, ProductPayload, Supplier } from "../types";
 
 export type AuthorizedFetch = <T>(url: string, init?: RequestInit) => Promise<T>;
 
-export function listProducts(fetcher: AuthorizedFetch) {
-  return fetcher<Product[]>(`${PRODUCTS_API_URL}/products/`);
+type ListProductsParams = {
+  page?: number;
+  limit?: number;
+  name?: string;
+};
+
+function buildProductsUrl(params: ListProductsParams = {}) {
+  const query = new URLSearchParams();
+  query.set("page", String(params.page ?? 1));
+  query.set("limit", String(params.limit ?? 10));
+
+  if (params.name?.trim()) {
+    query.set("name", params.name.trim());
+  }
+
+  return `${PRODUCTS_API_URL}/products/?${query.toString()}`;
 }
 
-export function searchProducts(fetcher: AuthorizedFetch, name: string) {
-  return fetcher<Product[]>(`${PRODUCTS_API_URL}/search_products/?name=${encodeURIComponent(name)}`);
+function normalizeProductsResponse(response: PaginatedProductsResponse | Product[], page: number, limit: number) {
+  if (Array.isArray(response)) {
+    return {
+      products: response.slice(0, limit),
+      total: response.length,
+      page,
+      page_size: limit,
+      total_pages: response.length ? Math.ceil(response.length / limit) : 0,
+    };
+  }
+
+  return response;
+}
+
+export async function listProducts(fetcher: AuthorizedFetch, params: ListProductsParams = {}) {
+  const page = params.page ?? 1;
+  const limit = params.limit ?? 10;
+  const response = await fetcher<PaginatedProductsResponse | Product[]>(buildProductsUrl({ ...params, page, limit }));
+  return normalizeProductsResponse(response, page, limit);
+}
+
+export function searchProducts(fetcher: AuthorizedFetch, name: string, params: Omit<ListProductsParams, "name"> = {}) {
+  return listProducts(fetcher, { ...params, name });
 }
 
 export function getProduct(fetcher: AuthorizedFetch, productId: string) {
