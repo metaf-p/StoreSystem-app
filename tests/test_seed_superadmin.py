@@ -59,9 +59,8 @@ class _FakeDb:
 
 
 class _ExistingUser:
-    def __init__(self, role="customer", is_superadmin=False):
+    def __init__(self, role="customer"):
         self.role = role
-        self.is_superadmin = is_superadmin
 
 
 class CreateUserTest(unittest.TestCase):
@@ -73,11 +72,12 @@ class CreateUserTest(unittest.TestCase):
             password="Admin12345",
         )
 
-        crud.create_user(db=db, user=user, is_superadmin=True)
+        with patch.object(crud, "get_password_hash", return_value="hashed-password"):
+            crud.create_user(db=db, user=user, role="admin")
 
         self.assertIsNotNone(db.added)
         self.assertEqual(db.added.role, "admin")
-        self.assertTrue(db.added.is_superadmin)
+        self.assertFalse(hasattr(db.added, "is_superadmin"))
         self.assertEqual(db.commit_count, 1)
         self.assertEqual(db.refresh_count, 1)
 
@@ -105,7 +105,7 @@ class SeedSuperadminTest(unittest.TestCase):
 
     def test_seed_superadmin_promotes_existing_seed_user(self):
         db = _FakeDb()
-        existing_user = _ExistingUser(role="customer", is_superadmin=False)
+        existing_user = _ExistingUser(role="customer")
 
         with patch.object(database, "SessionLocal", return_value=db), \
                 patch.object(database, "SEED_SUPERADMIN_ENABLED", True), \
@@ -116,7 +116,6 @@ class SeedSuperadminTest(unittest.TestCase):
 
         self.assertIs(result, existing_user)
         self.assertEqual(existing_user.role, "admin")
-        self.assertTrue(existing_user.is_superadmin)
         self.assertEqual(db.commit_count, 1)
         self.assertEqual(db.refresh_count, 1)
         create_user.assert_not_called()

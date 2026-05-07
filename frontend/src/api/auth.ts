@@ -4,8 +4,10 @@ import type {
   LoginResponse,
   PaginatedUsersResponse,
   RefreshTokenResponse,
+  DeleteUserResponse,
   SortOrder,
   UserRole,
+  UserUpdateResponse,
   UserSortField,
 } from "../types";
 import { parseApiResponse } from "../lib/http";
@@ -85,10 +87,29 @@ export function listUsers(fetcher: AuthorizedFetch, params: ListUsersParams = {}
   return fetcher<PaginatedUsersResponse>(buildUsersUrl(params));
 }
 
+type UpdateUserPayload = {
+  name: string;
+  email: string;
+};
+
+export function updateUser(fetcher: AuthorizedFetch, userId: string, payload: UpdateUserPayload) {
+  return fetcher<UserUpdateResponse>(`${AUTH_API_URL}/users/edit/${userId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
 export function updateUserRole(fetcher: AuthorizedFetch, userId: string, role: UserRole) {
   return fetcher<{ detail: string; role: UserRole }>(`${AUTH_API_URL}/users/${userId}/role`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ role }),
+  });
+}
+
+export function deleteUser(fetcher: AuthorizedFetch, userId: string) {
+  return fetcher<DeleteUserResponse>(`${AUTH_API_URL}/users/delete/${userId}`, {
+    method: "DELETE",
   });
 }

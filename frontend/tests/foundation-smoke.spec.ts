@@ -761,6 +761,7 @@ test("user list empty state shows no users message", async ({ page }) => {
 
   await page.goto("/app/user-list");
 
+  await expect(page.getByRole("heading", { name: "Управление пользователями" })).toBeVisible();
   await expect(page.getByText("Пользователи не найдены")).toBeVisible();
 });
 
@@ -771,6 +772,7 @@ test("user list load errors are shown in the table state", async ({ page }) => {
 
   await page.goto("/app/user-list");
 
+  await expect(page.getByRole("heading", { name: "Управление пользователями" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "Ошибка загрузки пользователей" })).toBeVisible();
 });
 
@@ -778,6 +780,7 @@ test("user list search debounce, filters, page size, sort and pagination use ser
   const state = await mockUserListSession(page, adminUser);
 
   await page.goto("/app/user-list");
+  await expect(page.getByRole("heading", { name: "Управление пользователями" })).toBeVisible();
   await page.getByLabel("Поиск").fill("Julia");
   await expect.poll(() => state.requestLog.some((entry) => entry.includes("search=Julia"))).toBe(true);
 
@@ -802,26 +805,59 @@ test("user list search debounce, filters, page size, sort and pagination use ser
   await expect.poll(() => state.requestLog.some((entry) => entry.includes("page=2"))).toBe(true);
 });
 
-test("changing a user role updates the backend and reloads the list", async ({ page }) => {
+test("editing a user updates the backend and reloads the list", async ({ page }) => {
   const state = await mockUserListSession(page, adminUser);
 
   await page.goto("/app/user-list");
-  await page.getByTestId("user-role-select-user-anna").selectOption("operator");
+  await expect(page.getByRole("heading", { name: "Управление пользователями" })).toBeVisible();
+  await expect(page.getByTestId("user-row-user-anna")).toBeVisible();
+  await page.getByTestId("user-edit-button-user-anna").click();
+  await expect(page.getByRole("dialog", { name: "Редактирование пользователя" })).toBeVisible();
 
-  await expect(page.getByText("Роль пользователя обновлена")).toBeVisible();
+  await page.getByLabel("Имя").fill("Anna Petrova Updated");
+  await page.getByLabel("Email").fill("anna.petrova.updated@example.com");
+  await page.getByLabel("Роль").selectOption("operator");
+  await page.getByRole("button", { name: "Сохранить изменения" }).click();
+
+  await expect(page.getByText("Пользователь успешно обновлен")).toBeVisible();
+  await expect.poll(() => state.requestLog.some((entry) => entry.includes("PUT /users/edit/user-anna"))).toBe(true);
   await expect.poll(() => state.requestLog.some((entry) => entry.includes("PUT /users/user-anna/role:operator"))).toBe(true);
+  await expect(page.getByTestId("user-row-user-anna")).toContainText("Anna Petrova Updated");
+  await expect(page.getByTestId("user-row-user-anna")).toContainText("anna.petrova.updated@example.com");
   await expect(page.getByTestId("user-row-user-anna")).toContainText("Оператор");
 });
 
-test("cannot remove the last admin role and the role select is restored", async ({ page }) => {
+test("cannot remove the last admin role from the edit modal", async ({ page }) => {
   const state = await mockUserListSession(page, adminUser);
 
   await page.goto("/app/user-list");
-  await page.getByTestId("user-role-select-user-admin").selectOption("customer");
+  await expect(page.getByRole("heading", { name: "Управление пользователями" })).toBeVisible();
+  await expect(page.getByTestId("user-row-user-admin")).toBeVisible();
+  await page.getByTestId("user-edit-button-user-admin").click();
+  await page.getByLabel("Роль").selectOption("customer");
+  await page.getByRole("button", { name: "Сохранить изменения" }).click();
 
   await expect(page.getByText("Cannot remove the last admin role")).toBeVisible();
   await expect.poll(() => state.requestLog.some((entry) => entry.includes("PUT /users/user-admin/role:customer"))).toBe(true);
+  await expect(page.getByRole("dialog", { name: "Редактирование пользователя" })).toBeVisible();
   await expect(page.getByTestId("user-row-user-admin")).toContainText("Администратор");
+});
+
+test("deleting a user requires confirmation and reloads the list", async ({ page }) => {
+  const state = await mockUserListSession(page, adminUser);
+
+  await page.goto("/app/user-list");
+  await expect(page.getByRole("heading", { name: "Управление пользователями" })).toBeVisible();
+  await expect(page.getByTestId("user-row-user-anna")).toBeVisible();
+  await page.getByTestId("user-edit-button-user-anna").click();
+  await page.getByRole("button", { name: "Удалить пользователя" }).click();
+
+  await expect(page.getByRole("alertdialog")).toContainText("Anna Petrova");
+  await page.getByRole("alertdialog").getByRole("button", { name: "Удалить" }).click();
+
+  await expect(page.getByText("Пользователь удален")).toBeVisible();
+  await expect.poll(() => state.requestLog.some((entry) => entry.includes("DELETE /users/delete/user-anna"))).toBe(true);
+  await expect(page.getByTestId("user-row-user-anna")).toHaveCount(0);
 });
 
 test("approve updates queue and calls patch/remove in order", async ({ page }) => {
@@ -3321,6 +3357,38 @@ async function mockUserListSession(
       return;
     }
 
+    if (path.startsWith("/users/edit/") && method === "PUT") {
+      const userId = path.split("/")[3] || "";
+      const body = route.request().postDataJSON() as { name?: string; email?: string };
+      state.requestLog.push(`PUT /users/edit/${userId}`);
+
+      const target = state.users.find((entry) => entry.id === userId);
+      if (!target) {
+        await fulfillJson(route, 404, { detail: "User not found" });
+        return;
+      }
+
+      const nextEmail = body.email?.trim().toLowerCase();
+      if (nextEmail && state.users.some((entry) => entry.id !== userId && entry.email.toLowerCase() === nextEmail)) {
+        await fulfillJson(route, 422, { detail: "Email already registered" });
+        return;
+      }
+
+      state.users = state.users.map((entry) =>
+        entry.id === userId
+          ? {
+              ...entry,
+              name: body.name?.trim() || entry.name,
+              email: body.email?.trim() || entry.email,
+            }
+          : entry,
+      );
+
+      const updatedUser = state.users.find((entry) => entry.id === userId) || target;
+      await fulfillJson(route, 200, { detail: "User successfully updated", user: updatedUser });
+      return;
+    }
+
     if (path.startsWith("/users/") && path.endsWith("/role") && method === "PUT") {
       const userId = path.split("/")[2] || "";
       const body = route.request().postDataJSON() as { role?: UserRole };
@@ -3340,6 +3408,31 @@ async function mockUserListSession(
 
       state.users = state.users.map((entry) => (entry.id === userId ? { ...entry, role: nextRole } : entry));
       await fulfillJson(route, 200, { detail: "User role successfully updated", role: nextRole });
+      return;
+    }
+
+    if (path.startsWith("/users/delete/") && method === "DELETE") {
+      const userId = path.split("/")[3] || "";
+      state.requestLog.push(`DELETE /users/delete/${userId}`);
+
+      const target = state.users.find((entry) => entry.id === userId);
+      if (!target) {
+        await fulfillJson(route, 404, { detail: "User not found" });
+        return;
+      }
+
+      if (userId === user.id) {
+        await fulfillJson(route, 403, { detail: "Super admin cannot delete own account" });
+        return;
+      }
+
+      if (target.role === "admin" && state.users.filter((entry) => entry.role === "admin").length <= 1) {
+        await fulfillJson(route, 403, { detail: "Cannot delete the last admin" });
+        return;
+      }
+
+      state.users = state.users.filter((entry) => entry.id !== userId);
+      await fulfillJson(route, 200, { detail: "User successfully deleted" });
       return;
     }
 

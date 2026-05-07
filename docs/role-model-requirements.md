@@ -2,7 +2,7 @@
 
 ## Назначение
 
-Фича заменяет старую модель доступа на основе булевого признака `is_superadmin` на единую ролевую модель с тремя ролями:
+Фича заменяет старую модель доступа на основе булевого признака superadmin на единую ролевую модель с тремя ролями:
 
 - `customer` - обычный пользователь;
 - `operator` - операционный сотрудник;
@@ -145,7 +145,7 @@ customer < operator < admin
 - `GET /check-superadmin`;
 - `POST /verify-token-with-admin`;
 - `PUT /users/promote/{user_id}`;
-- клиентские проверки `is_superadmin` / `isSuperAdmin`.
+- клиентские проверки legacy superadmin state.
 
 ## UI требования
 
@@ -166,7 +166,7 @@ customer < operator < admin
 
 - добавить колонку `role`, если ее еще нет;
 - перенести старые данные:
-  - `is_superadmin = true` -> `role = 'admin'`;
+  - legacy superadmin flag -> `role = 'admin'`;
   - остальные пользователи -> `role = 'customer'`;
 - нормализовать невалидные роли в `customer`;
 - назначить seed-пользователю роль `admin`.

@@ -1,15 +1,32 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ArrowUpDown, RotateCcw, Users } from "lucide-react";
-import { listUsers, updateUserRole } from "../api/auth";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Check, PencilLine, RotateCcw, Trash2, Users } from "lucide-react";
+import { deleteUser, listUsers, updateUser, updateUserRole } from "../api/auth";
 import { getErrorMessage } from "../lib/http";
 import { useAuth } from "../state/AuthContext";
 import type { AdminUser, PaginatedUsersResponse, SortOrder, UserRole, UserSortField } from "../types";
 import { Button } from "../ui/Button";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Input } from "../ui/Input";
+import { Modal } from "../ui/Modal";
 import { Select } from "../ui/Select";
 import { TableState } from "../ui/TableState";
 import { cn } from "../lib/utils";
 import { useToast } from "../ui/Toast";
+import { collectErrors, email as validateEmail, hasErrors, lengthBetween, noLeadingSpace, required } from "../lib/validation";
+
+type UserEditFormState = {
+  name: string;
+  email: string;
+  role: UserRole;
+};
+
+type UserEditFormErrors = Partial<Record<keyof UserEditFormState, string>>;
+
+const emptyUserEditForm: UserEditFormState = {
+  name: "",
+  email: "",
+  role: "customer",
+};
 
 const ROLE_LABELS: Record<UserRole, string> = {
   customer: "Клиент",
@@ -30,6 +47,7 @@ const ROLE_FILTER_OPTIONS: Array<{ value: "all" | UserRole; label: string }> = [
   { value: "admin", label: "Администратор" },
 ];
 
+const USER_ROLE_OPTIONS: UserRole[] = ["customer", "operator", "admin"];
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
 const DEFAULT_SORT_FIELD: UserSortField = "name";
 const DEFAULT_SORT_ORDER: SortOrder = "asc";
@@ -50,7 +68,12 @@ export function UserListPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [tableError, setTableError] = useState("");
-  const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
+  const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
+  const [editForm, setEditForm] = useState<UserEditFormState>(emptyUserEditForm);
+  const [editErrors, setEditErrors] = useState<UserEditFormErrors>({});
+  const [savingUser, setSavingUser] = useState(false);
+  const [deleteCandidate, setDeleteCandidate] = useState<AdminUser | null>(null);
+  const [deletingUser, setDeletingUser] = useState(false);
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -97,9 +120,7 @@ export function UserListPage() {
     return () => window.clearTimeout(timeout);
   }, [searchDraft]);
 
-  const paginationPages = useMemo(() => {
-    return Array.from({ length: totalPages }, (_, index) => index + 1);
-  }, [totalPages]);
+  const paginationPages = useMemo(() => Array.from({ length: totalPages }, (_, index) => index + 1), [totalPages]);
 
   const visibleRangeLabel = useMemo(() => {
     if (total === 0 || users.length === 0) {
@@ -123,23 +144,113 @@ export function UserListPage() {
     setSortOrder("asc");
   };
 
-  const handleRoleChange = async (user: AdminUser, nextRole: UserRole) => {
-    if (nextRole === user.role || updatingUserId === user.id) {
+  const openEditModal = (user: AdminUser) => {
+    setEditingUser(user);
+    setEditForm({
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    });
+    setEditErrors({});
+    setDeleteCandidate(null);
+    setSavingUser(false);
+    setDeletingUser(false);
+  };
+
+  const closeEditModal = () => {
+    setEditingUser(null);
+    setEditForm(emptyUserEditForm);
+    setEditErrors({});
+    setDeleteCandidate(null);
+    setSavingUser(false);
+    setDeletingUser(false);
+  };
+
+  const handleEditFieldChange = <K extends keyof UserEditFormState>(field: K, value: UserEditFormState[K]) => {
+    setEditForm((current) => ({ ...current, [field]: value }));
+    setEditErrors((current) => ({ ...current, [field]: undefined }));
+  };
+
+  const handleDeleteRequest = () => {
+    if (!editingUser) {
       return;
     }
 
-    setUpdatingUserId(user.id);
+    setDeleteCandidate(editingUser);
+  };
+
+  const handleDeleteCancel = () => {
+    setDeleteCandidate(null);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteCandidate) {
+      return;
+    }
+
+    setDeletingUser(true);
     try {
-      await updateUserRole(authorizedFetch, user.id, nextRole);
-      toast.success("Роль пользователя обновлена");
+      await deleteUser(authorizedFetch, deleteCandidate.id);
+      toast.success("Пользователь удален");
+      setDeleteCandidate(null);
+      closeEditModal();
+      await loadUsers();
     } catch (error) {
       toast.danger(getErrorMessage(error));
     } finally {
-      try {
-        await loadUsers();
-      } finally {
-        setUpdatingUserId(null);
+      setDeletingUser(false);
+    }
+  };
+
+  const handleSubmitEdit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!editingUser) {
+      return;
+    }
+
+    const validationErrors = validateUserEditForm(editForm);
+    if (hasErrors(validationErrors)) {
+      setEditErrors(validationErrors);
+      toast.danger("Проверьте ошибки в форме");
+      return;
+    }
+
+    const originalUser = editingUser;
+    const nextName = editForm.name.trim();
+    const nextEmail = editForm.email.trim();
+    const nextRole = editForm.role;
+    const roleChanged = nextRole !== originalUser.role;
+
+    setSavingUser(true);
+    try {
+      if (roleChanged) {
+        await updateUserRole(authorizedFetch, originalUser.id, nextRole);
       }
+
+      await updateUser(authorizedFetch, originalUser.id, {
+        name: nextName,
+        email: nextEmail,
+      });
+
+      toast.success("Пользователь успешно обновлен");
+      closeEditModal();
+      await loadUsers();
+    } catch (error) {
+      const message = getErrorMessage(error);
+
+      if (roleChanged) {
+        try {
+          await updateUserRole(authorizedFetch, originalUser.id, originalUser.role);
+        } catch (rollbackError) {
+          toast.danger(`${message} Не удалось восстановить прежнюю роль: ${getErrorMessage(rollbackError)}`);
+          return;
+        }
+      }
+
+      toast.danger(message);
+    } finally {
+      setSavingUser(false);
     }
   };
 
@@ -175,7 +286,7 @@ export function UserListPage() {
             <div className="space-y-2">
               <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Управление пользователями</h1>
               <p className="max-w-2xl text-sm leading-6 text-slate-200 sm:text-base">
-                Серверный поиск, сортировка, фильтры и смена ролей для администраторов.
+                Серверный поиск, сортировка, фильтры и редактирование профилей пользователей для администраторов.
               </p>
             </div>
           </div>
@@ -239,23 +350,15 @@ export function UserListPage() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[980px] border-separate border-spacing-0">
+          <table className="w-full min-w-[820px] border-separate border-spacing-0">
             <colgroup>
-              <col className="w-[18%]" />
-              <col className="w-[26%]" />
-              <col className="w-[30%]" />
-              <col className="w-[14%]" />
+              <col className="w-[34%]" />
+              <col className="w-[38%]" />
+              <col className="w-[16%]" />
               <col className="w-[12%]" />
             </colgroup>
             <thead className="bg-muted/60 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <tr>
-                <SortableHeaderCell
-                  label="ID"
-                  field="id"
-                  sortField={sortField}
-                  sortOrder={sortOrder}
-                  onSort={handleSort}
-                />
                 <SortableHeaderCell
                   label="Имя"
                   field="name"
@@ -280,10 +383,9 @@ export function UserListPage() {
                 <th className="px-6 py-4 text-center">Действия</th>
               </tr>
             </thead>
-            <TableState loading={loading} error={tableError} empty={users.length === 0} emptyMessage="Пользователи не найдены" colSpan={5}>
+            <TableState loading={loading} error={tableError} empty={users.length === 0} emptyMessage="Пользователи не найдены" colSpan={4}>
               {users.map((user) => (
                 <tr key={user.id} data-testid={`user-row-${user.id}`} className="border-t border-border/60 text-sm">
-                  <td className="break-all px-6 py-4 align-top text-muted-foreground">{user.id}</td>
                   <td className="px-6 py-4 align-top font-medium text-foreground">{user.name}</td>
                   <td className="px-6 py-4 align-top text-muted-foreground">{user.email}</td>
                   <td className="px-6 py-4 align-top">
@@ -296,21 +398,19 @@ export function UserListPage() {
                       {ROLE_LABELS[user.role]}
                     </span>
                   </td>
-                  <td className="px-6 py-4 align-top">
-                    <Select
-                      name={`user-role-${user.id}`}
-                      label={`Роль ${user.name}`}
-                      labelHidden
-                      value={user.role}
-                      onChange={(event) => handleRoleChange(user, event.target.value as UserRole)}
-                      disabled={updatingUserId === user.id}
-                      wrapperClassName="mb-0 min-w-[180px]"
-                      data-testid={`user-role-select-${user.id}`}
+                  <td className="px-6 py-4 align-top text-center">
+                    <Button
+                      type="button"
+                      variant="outline-warning"
+                      size="sm"
+                      className="h-9 w-9 rounded-full p-0"
+                      aria-label={`Редактировать пользователя ${user.name}`}
+                      title={`Редактировать пользователя ${user.name}`}
+                      data-testid={`user-edit-button-${user.id}`}
+                      onClick={() => openEditModal(user)}
                     >
-                      <option value="customer">Клиент</option>
-                      <option value="operator">Оператор</option>
-                      <option value="admin">Администратор</option>
-                    </Select>
+                      <PencilLine className="h-4 w-4" />
+                    </Button>
                   </td>
                 </tr>
               ))}
@@ -359,8 +459,102 @@ export function UserListPage() {
           </div>
         ) : null}
       </section>
+
+      {editingUser ? (
+        <Modal title="Редактирование пользователя" onClose={closeEditModal}>
+          <form className="space-y-4 overflow-x-hidden" onSubmit={handleSubmitEdit} noValidate>
+            <Input
+              name="name"
+              label="Имя"
+              value={editForm.name}
+              error={editErrors.name}
+              required
+              disabled={savingUser || deletingUser}
+              onChange={(event) => handleEditFieldChange("name", event.target.value)}
+            />
+            <Input
+              type="email"
+              name="email"
+              label="Email"
+              value={editForm.email}
+              error={editErrors.email}
+              required
+              disabled={savingUser || deletingUser}
+              onChange={(event) => handleEditFieldChange("email", event.target.value)}
+            />
+            <Select
+              name="role"
+              label="Роль"
+              value={editForm.role}
+              error={editErrors.role}
+              required
+              disabled={savingUser || deletingUser}
+              onChange={(event) => handleEditFieldChange("role", event.target.value as UserRole)}
+            >
+              {USER_ROLE_OPTIONS.map((role) => (
+                <option key={role} value={role}>
+                  {ROLE_LABELS[role]}
+                </option>
+              ))}
+            </Select>
+
+            <div className="space-y-3 border-t border-border pt-5">
+              <div>
+                <Button
+                  type="button"
+                  variant="outline-danger"
+                  onClick={handleDeleteRequest}
+                  disabled={savingUser || deletingUser}
+                  className="w-full justify-center sm:w-auto sm:justify-start"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Удалить пользователя
+                </Button>
+              </div>
+
+              <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                <Button type="button" variant="outline-secondary" onClick={closeEditModal} disabled={savingUser || deletingUser}>
+                  Отмена
+                </Button>
+                <Button type="submit" disabled={savingUser || deletingUser}>
+                  <Check className="h-4 w-4" />
+                  {savingUser ? "Сохранение..." : "Сохранить изменения"}
+                </Button>
+              </div>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
+
+      {deleteCandidate ? (
+        <ConfirmDialog
+          title="Удалить пользователя?"
+          onCancel={handleDeleteCancel}
+          onConfirm={handleDeleteConfirm}
+          confirmLabel="Удалить"
+          confirming={deletingUser}
+        >
+          Пользователь <strong>{deleteCandidate.name}</strong> ({deleteCandidate.email}) будет удалён без возможности восстановления.
+        </ConfirmDialog>
+      ) : null}
     </div>
   );
+}
+
+function validateUserEditForm(form: UserEditFormState) {
+  const nameRequired = required(form.name, "Имя пользователя обязательно для заполнения.");
+  const emailRequired = required(form.email, "Email обязателен для заполнения.");
+
+  return collectErrors([
+    [
+      "name",
+      nameRequired ||
+        noLeadingSpace(form.name, "Имя должно содержать от 3 до 50 символов и не начинаться с пробела.") ||
+        lengthBetween(form.name, 3, 50, "Имя должно содержать от 3 до 50 символов и не начинаться с пробела."),
+    ],
+    ["email", emailRequired || validateEmail(form.email)],
+    ["role", required(form.role, "Роль обязательна для заполнения.")],
+  ]);
 }
 
 function SortableHeaderCell({

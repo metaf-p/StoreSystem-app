@@ -43,7 +43,7 @@ customer < operator < admin
 role = Column(String, default="customer", nullable=False, index=True)
 ```
 
-Поле `is_superadmin` оставлено как legacy migration source. Бизнес-логика должна использовать `role`, а не `is_superadmin`.
+Поле `is_superadmin` удалено из модели и БД. При старте `auth_service` исторические данные переносятся в `role`, после чего legacy-колонка удаляется. Бизнес-логика использует `role`, а не `is_superadmin`.
 
 ## Миграция
 
@@ -67,8 +67,9 @@ SET role = CASE WHEN is_superadmin THEN 'admin' ELSE 'customer' END
 WHERE role IS NULL OR role = 'customer'
 ```
 
-5. Невалидные роли нормализуются в `customer`.
-6. Seed-пользователь получает роль `admin`.
+5. Legacy-колонка `is_superadmin` удаляется.
+6. Невалидные роли нормализуются в `customer`.
+7. Seed-пользователь получает роль `admin`.
 
 ## Auth service
 
@@ -311,7 +312,6 @@ node --check <file>
 
 ## Известные ограничения
 
-- `is_superadmin` остается в модели только как legacy migration source.
 - Роли фиксированы в коде, отдельной таблицы `roles` нет.
 - Access token не содержит role claim; роль всегда берется из `auth_service`.
 - Для запуска полного приложения нужны рабочие Kafka/PostgreSQL контейнеры и зависимости каждого сервиса.

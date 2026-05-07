@@ -9,11 +9,10 @@ from scripts import cleanup_users_except_seed_admin as cleanup
 
 
 class _FakeUser:
-    def __init__(self, user_id, email, role="customer", is_superadmin=False):
+    def __init__(self, user_id, email, role="customer"):
         self.id = user_id
         self.email = email
         self.role = role
-        self.is_superadmin = is_superadmin
 
 
 class _FakeQuery:
@@ -107,7 +106,6 @@ class CleanupUsersExceptSeedAdminTest(unittest.TestCase):
         self.assertEqual(session.rollback_count, 0)
         self.assertEqual(session.refresh_count, 1)
         self.assertEqual(seed_user.role, "admin")
-        self.assertTrue(seed_user.is_superadmin)
         self.assertEqual(
             [call.args[1] for call in drop_role_for_user.call_args_list],
             ["alice@example.com", "bob@example.com"],

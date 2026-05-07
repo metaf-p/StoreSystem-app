@@ -14,7 +14,16 @@ export type AdminUser = {
   role: UserRole;
 };
 
-export type UserSortField = "id" | "name" | "email" | "role";
+export type UserSortField = "name" | "email" | "role";
+
+export type UserUpdateResponse = {
+  detail: string;
+  user: AdminUser;
+};
+
+export type DeleteUserResponse = {
+  detail: string;
+};
 
 export type SortOrder = "asc" | "desc";
 

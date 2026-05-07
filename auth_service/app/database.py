@@ -42,6 +42,9 @@ def migrate_user_roles():
                 "UPDATE users SET role = CASE WHEN is_superadmin THEN 'admin' ELSE 'customer' END "
                 "WHERE role IS NULL OR role = 'customer'"
             ))
+            connection.execute(text(
+                "ALTER TABLE users DROP COLUMN IF EXISTS is_superadmin"
+            ))
         connection.execute(text(
             "UPDATE users SET role = 'customer' WHERE role NOT IN ('customer', 'operator', 'admin')"
         ))
@@ -87,7 +90,6 @@ def seed_superadmin():
         if existing_user:
             if existing_user.role != "admin":
                 existing_user.role = "admin"
-                existing_user.is_superadmin = True
                 db.commit()
                 db.refresh(existing_user)
                 logger.log_message(

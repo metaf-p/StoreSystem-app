@@ -23,9 +23,7 @@ def normalize_role(role: str) -> str:
     return role
 
 
-def create_user(db: Session, user: UserCreate, role: str = "customer", is_superadmin: bool = False):
-    if is_superadmin:
-        role = "admin"
+def create_user(db: Session, user: UserCreate, role: str = "customer"):
     role = normalize_role(role)
     hashed_password = get_password_hash(user.password)
     db_user = User(
@@ -34,7 +32,6 @@ def create_user(db: Session, user: UserCreate, role: str = "customer", is_supera
         name=user.name,
         hashed_password=hashed_password,
         role=role,
-        is_superadmin=role == "admin",
     )
     try:
         # Синхронизируем PostgreSQL-роль до коммита, чтобы откатить все изменения
@@ -109,7 +106,6 @@ def update_user_role(db: Session, user_id: uuid.UUID, role: str):
         return None
 
     user.role = role
-    user.is_superadmin = role == "admin"
     db.commit()
     db.refresh(user)
     logger.log_message(f"A user {user.email} role changed to {role}")

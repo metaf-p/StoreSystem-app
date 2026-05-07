@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Boolean, DateTime
+from sqlalchemy import Column, String, DateTime
 from datetime import datetime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declarative_base
@@ -16,7 +16,6 @@ class User(Base):
     email = Column(String, unique=True, index=True)
     hashed_password = Column(String)
     role = Column(String, default="customer", nullable=False, index=True)
-    is_superadmin = Column(Boolean, default=False)  # Legacy migration source.
 
 
 class Token(Base):

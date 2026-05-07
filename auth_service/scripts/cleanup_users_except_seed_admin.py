@@ -41,7 +41,6 @@ def purge_users_except_seed_admin(db, seed_user):
     users_to_delete = list_users_to_delete(db, seed_user)
     if seed_user.role != "admin":
         seed_user.role = "admin"
-        seed_user.is_superadmin = True
 
     deleted_emails = []
     try:
